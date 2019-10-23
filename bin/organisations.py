@@ -62,29 +62,32 @@ def load_opendatacommunities():
     sparql = SPARQLWrapper("https://opendatacommunities.org/sparql")
     sparql.setQuery(
         """
-    SELECT ?uri ?name ?gss
-    WHERE {
-      VALUES ?o { 
-        <http://opendatacommunities.org/def/ontology/admingeo/nationalPark>
-        <http://opendatacommunities.org/def/ontology/admingeo/County>
-        <http://opendatacommunities.org/def/ontology/admingeo/UnitaryAuthority>
-        <http://opendatacommunities.org/def/ontology/admingeo/MetropolitanDistrict>
-        <http://opendatacommunities.org/def/ontology/admingeo/NonMetropolitanDistrict>
-        <http://opendatacommunities.org/def/ontology/admingeo/LondonBorough>
-        <http://opendatacommunities.org/def/local-government/DevelopmentCorporation>
-      }
-
-        ?uri ?p ?o ;
-            <http://www.w3.org/2000/01/rdf-schema#label> ?name ;
-            <http://publishmydata.com/def/ontology/foi/code> ?gss
-      }
+        PREFIX admingeo: <http://opendatacommunities.org/def/ontology/admingeo/>
+        PREFIX localgov: <http://opendatacommunities.org/def/local-government/>
+        SELECT ?uri ?name ?gss
+        WHERE {
+            VALUES ?o {
+                admingeo:nationalPark
+                admingeo:County
+                admingeo:UnitaryAuthority
+                admingeo:MetropolitanDistrict
+                admingeo:NonMetropolitanDistrict
+                admingeo:LondonBorough
+                localgov:DevelopmentCorporation
+            }
+            ?uri ?p ?o ;
+                <http://www.w3.org/2000/01/rdf-schema#label> ?name ;
+                <http://publishmydata.com/def/ontology/foi/code> ?gss
+        }
     """
     )
     sparql.setReturnFormat(CSV)
     results = sparql.query().convert()
     for row in csv.DictReader(results.decode("utf-8").splitlines()):
         if row["gss"] in gss:
-            organisations[gss[row["gss"]]]["opendatacommunities"] = row["uri"]
+            organisation = gss[row["gss"]]
+            organisations[organisation]["opendatacommunities"] = row["uri"]
+            organisations[organisation].setdefault("name", row["name"])
 
 
 load_register("local-authority-eng", ["name", "official-name", "end-date"])
