@@ -3,7 +3,7 @@
 import sys
 import csv
 import requests
-from SPARQLWrapper import SPARQLWrapper, CSV
+from SPARQLWrapper import SPARQLWrapper, JSON
 
 
 organisations = {}
@@ -14,8 +14,10 @@ fields = [
     "name",
     "website",
     "statistical-geography",
+    "toid",
     "opendatacommunities",
     "data-govuk",
+    "wikidata",
     "start-date",
     "end-date",
 ]
@@ -26,14 +28,14 @@ def load(f, key, fields, prefix=""):
         if row[key]:
             curie = prefix + row[key]
             organisations.setdefault(curie, {})
-            for f in fields:
-                t = (
+            for field in fields:
+                to = (
                     "statistical-geography"
-                    if f.startswith("statistical-geography")
-                    else f
+                    if field.startswith("statistical-geography")
+                    else field
                 )
-                if row[f]:
-                    organisations[curie][t] = row[f]
+                if row[field]:
+                    organisations[curie][to] = row[field]
 
 
 def load_register(key, fields, register=None):
@@ -52,42 +54,45 @@ def load_file(path, key, fields):
     return load(open(path), key, fields)
 
 
-def index_gss():
+def index(key):
+    index = {}
     for o in organisations:
-        if "statistical-geography" in organisations[o]:
-            gss[organisations[o]["statistical-geography"]] = o
+        if key in organisations[o]:
+            index[organisations[o][key]] = o
+    return index
 
 
-def load_opendatacommunities():
-    sparql = SPARQLWrapper("https://opendatacommunities.org/sparql")
-    sparql.setQuery(
-        """
-        PREFIX admingeo: <http://opendatacommunities.org/def/ontology/admingeo/>
-        PREFIX localgov: <http://opendatacommunities.org/def/local-government/>
-        SELECT ?uri ?name ?gss
-        WHERE {
-            VALUES ?o {
-                admingeo:nationalPark
-                admingeo:County
-                admingeo:UnitaryAuthority
-                admingeo:MetropolitanDistrict
-                admingeo:NonMetropolitanDistrict
-                admingeo:LondonBorough
-                localgov:DevelopmentCorporation
-            }
-            ?uri ?p ?o ;
-                <http://www.w3.org/2000/01/rdf-schema#label> ?name ;
-                <http://publishmydata.com/def/ontology/foi/code> ?gss
-        }
-    """
+def remove_prefix(value, prefix):
+    if prefix and value.startswith(prefix):
+       return value[len(prefix):]
+    return value
+
+
+def patch(results, key, fields, col=None, prefix=None):
+    if not col:
+        col = key
+    keys = index(key)
+    for d in results["results"]["bindings"]:
+        row = {}
+        for k in d:
+            row[k] = d[k]["value"]
+
+        if col in row and row[col] in keys:
+            organisation = keys[row[col]]
+            for field in fields:
+                value = remove_prefix(row[field], prefix)
+                organisations[organisation].setdefault(field, value)
+
+
+def patch_sparql(endpoint, query, key, fields, col=None, prefix=None):
+    sparql = SPARQLWrapper(
+        endpoint,
+        agent="Mozilla/5.0 (Windows NT 5.1; rv:36.0) Gecko/20100101 Firefox/36.0",
     )
-    sparql.setReturnFormat(CSV)
-    results = sparql.query().convert()
-    for row in csv.DictReader(results.decode("utf-8").splitlines()):
-        if row["gss"] in gss:
-            organisation = gss[row["gss"]]
-            organisations[organisation]["opendatacommunities"] = row["uri"]
-            organisations[organisation].setdefault("name", row["name"])
+
+    sparql.setQuery(query)
+    sparql.setReturnFormat(JSON)
+    patch(sparql.query().convert(), key, fields, col, prefix)
 
 
 load_register("local-authority-eng", ["name", "official-name", "end-date"])
@@ -127,8 +132,57 @@ load_file(
     ["name", "website", "statistical-geography"],
 )
 
-index_gss()
-load_opendatacommunities()
+# add development corporation names and URIs from opencommunities.org
+patch_sparql(
+    "https://opendatacommunities.org/sparql",
+    """
+    PREFIX admingeo: <http://opendatacommunities.org/def/ontology/admingeo/>
+    PREFIX localgov: <http://opendatacommunities.org/def/local-government/>
+    SELECT DISTINCT ?opendatacommunities ?name ?gss
+    WHERE {
+        VALUES ?o {
+            admingeo:nationalPark
+            admingeo:County
+            admingeo:UnitaryAuthority
+            admingeo:MetropolitanDistrict
+            admingeo:NonMetropolitanDistrict
+            admingeo:LondonBorough
+            localgov:DevelopmentCorporation
+        }
+        ?opendatacommunities ?p ?o ;
+            <http://publishmydata.com/def/ontology/foi/displayName> ?name ;
+            <http://publishmydata.com/def/ontology/foi/code> ?gss
+    }
+    """,
+    "statistical-geography",
+    ["name", "opendatacommunities"],
+    "gss",
+)
+
+
+# add website, toids from wikidata
+patch_sparql(
+    "https://query.wikidata.org/sparql",
+    """
+    SELECT DISTINCT ?wikidata ?gss ?toid ?website
+    WHERE
+    {
+      VALUES ?q {
+        wd:Q1187580
+        wd:Q1006876
+        wd:Q1002812
+      }
+      ?wikidata wdt:P31 wd:Q1006876;
+             wdt:P3120 ?toid;
+             wdt:P856 ?website;
+             OPTIONAL { ?wikidata wdt:P836 ?gss }
+    }
+    """,
+    "statistical-geography",
+    ["wikidata", "website", "toid"],
+    "gss",
+    prefix="http://www.wikidata.org/entity/",
+)
 
 
 w = csv.DictWriter(sys.stdout, fields, extrasaction="ignore")
