@@ -80,8 +80,9 @@ def patch(results, key, fields, col=None, prefix=None):
         if col in row and row[col] in keys:
             organisation = keys[row[col]]
             for field in fields:
-                value = remove_prefix(row[field], prefix)
-                organisations[organisation].setdefault(field, value)
+                if field in row:
+                    value = remove_prefix(row[field], prefix)
+                    organisations[organisation].setdefault(field, value)
 
 
 def patch_sparql(endpoint, query, key, fields, col=None, prefix=None):
@@ -168,14 +169,29 @@ patch_sparql(
     WHERE
     {
       VALUES ?q {
-        wd:Q1187580
-        wd:Q1006876
-        wd:Q1002812
+        wd:Q4321471 # county council 
+        wd:Q5150900 # combined authority 
+        wd:Q21561328 # English unitary authority council 
+        wd:Q19414242 # English metropolitan district council 
+        wd:Q21561306 # English non-metropolitan district council 
+        wd:Q21561350 # London borough council 
+        wd:Q16690653 # borough council 
+        wd:Q180673 # ceremonial county of England
+        wd:Q171809 # county of England
+        wd:Q1138494 # historic county of England
+        wd:Q769628 # metropolitan county
+        wd:Q769603 # non-metropolitan county
+        wd:Q1136601 # unitary authority of England
+        wd:Q21272231 # county council area
+        wd:Q211690 #  London borough
+        wd:Q1002812 # metropolitan borough
+        wd:Q1187580 # non-metropolitan district
+        wd:Q1006876 # borough in the United Kingdom
       }
-      ?wikidata wdt:P31 wd:Q1006876;
-             wdt:P3120 ?toid;
-             wdt:P856 ?website;
-             OPTIONAL { ?wikidata wdt:P836 ?gss }
+      ?wikidata wdt:P31 ?q .
+         { ?wikidata wdt:P856 ?website }
+         OPTIONAL { ?wikidata wdt:P3120 ?toid }
+         OPTIONAL { ?wikidata wdt:P836 ?gss }
     }
     """,
     "statistical-geography",
