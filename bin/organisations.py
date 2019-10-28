@@ -7,23 +7,23 @@ from SPARQLWrapper import SPARQLWrapper, JSON
 
 
 organisations = {}
-gss = {}
 
 fields = [
     "organisation",
+    "wikidata",
     "name",
     "website",
     "statistical-geography",
     "toid",
     "opendatacommunities",
     "data-govuk",
-    "wikidata",
     "start-date",
     "end-date",
 ]
 
-
-def load(f, key, fields, prefix=""):
+def load(f, key, fields, prefix=None):
+    if prefix is None:
+        prefix = key + ":"
     for row in csv.DictReader(f):
         if row[key]:
             curie = prefix + row[key]
@@ -42,16 +42,11 @@ def load_register(key, fields, register=None):
     url = "https://%s.register.gov.uk/records.csv?page-index=1&page-size=5000" % (
         register or key
     )
-    return load(
-        requests.get(url).content.decode("utf-8").splitlines(),
-        key,
-        fields,
-        prefix=key + ":",
-    )
+    return load(requests.get(url).content.decode("utf-8").splitlines(), key, fields)
 
 
-def load_file(path, key, fields):
-    return load(open(path), key, fields)
+def load_file(path, key, fields, prefix=None):
+    return load(open(path), key, fields, prefix)
 
 
 def index(key):
@@ -64,77 +59,105 @@ def index(key):
 
 def remove_prefix(value, prefix):
     if prefix and value.startswith(prefix):
-       return value[len(prefix):]
+        return value[len(prefix) :]
     return value
 
 
-def patch(results, key, fields, col=None, prefix=None):
-    if not col:
-        col = key
+def patch(results, key, fields, prefix=None):
     keys = index(key)
     for d in results["results"]["bindings"]:
         row = {}
         for k in d:
-            row[k] = d[k]["value"]
+            row[k] = remove_prefix(d[k]["value"], prefix)
+            if k == "inception":
+                row["start-date"] = row[k]
+            elif k == "dissolved":
+                row["end-date"] = row[k]
+            elif k == "gss":
+                row["statistical-geography"] = row[k]
 
-        if col in row and row[col] in keys:
-            organisation = keys[row[col]]
+        if key in row and row[key] in keys:
+            organisation = keys[row[key]]
             for field in fields:
                 if field in row:
-                    value = remove_prefix(row[field], prefix)
-                    organisations[organisation].setdefault(field, value)
+                    organisations[organisation].setdefault(field, row[field])
 
 
-def patch_sparql(endpoint, query, key, fields, col=None, prefix=None):
-    sparql = SPARQLWrapper(
+def sparql(endpoint, query):
+    s = SPARQLWrapper(
         endpoint,
         agent="Mozilla/5.0 (Windows NT 5.1; rv:36.0) Gecko/20100101 Firefox/36.0",
     )
 
-    sparql.setQuery(query)
-    sparql.setReturnFormat(JSON)
-    patch(sparql.query().convert(), key, fields, col, prefix)
+    s.setQuery(query)
+    s.setReturnFormat(JSON)
+    return s.query().convert()
 
 
-load_register("local-authority-eng", ["name", "official-name", "end-date"])
-load_register("government-organisation", ["name", "website", "end-date"])
+if True:
+    load_register("local-authority-eng", ["name", "official-name", "end-date"])
+    load_register("government-organisation", ["name", "website", "end-date"])
 
-# statistical geography codes
-load_register(
-    "local-authority-eng",
-    ["statistical-geography-county-eng"],
-    register="statistical-geography-county-eng",
-)
-load_register(
-    "local-authority-eng",
-    ["statistical-geography-london-borough-eng"],
-    register="statistical-geography-london-borough-eng",
-)
-load_register(
-    "local-authority-eng",
-    ["statistical-geography-metropolitan-district-eng"],
-    register="statistical-geography-metropolitan-district-eng",
-)
-load_register(
-    "local-authority-eng",
-    ["statistical-geography-non-metropolitan-district-eng"],
-    register="statistical-geography-non-metropolitan-district-eng",
-)
-load_register(
-    "local-authority-eng",
-    ["statistical-geography-unitary-authority-eng"],
-    register="statistical-geography-unitary-authority-eng",
-)
+    # statistical geography codes
+    load_register(
+        "local-authority-eng",
+        ["statistical-geography-county-eng"],
+        register="statistical-geography-county-eng",
+    )
+    load_register(
+        "local-authority-eng",
+        ["statistical-geography-london-borough-eng"],
+        register="statistical-geography-london-borough-eng",
+    )
+    load_register(
+        "local-authority-eng",
+        ["statistical-geography-metropolitan-district-eng"],
+        register="statistical-geography-metropolitan-district-eng",
+    )
+    load_register(
+        "local-authority-eng",
+        ["statistical-geography-non-metropolitan-district-eng"],
+        register="statistical-geography-non-metropolitan-district-eng",
+    )
+    load_register(
+        "local-authority-eng",
+        ["statistical-geography-unitary-authority-eng"],
+        register="statistical-geography-unitary-authority-eng",
+    )
 
-# assert fixes
+# add curated organisations, which includes development corporations
 load_file(
     "data/organisation.csv",
     "organisation",
-    ["name", "website", "statistical-geography"],
+    ["wikidata", "government-organisation", "planning-authority-legislation"],
+    prefix="",
+    #add={"digital-land-organisation", True}
 )
 
-# add development corporation names and URIs from opencommunities.org
-patch_sparql(
+# add development corporations and national parks
+corporations = sparql(
+    "https://query.wikidata.org/sparql",
+    """
+    SELECT DISTINCT * WHERE {
+      VALUES ?q { 
+            wd:Q3336962 # National Park Authority
+            wd:Q5266682 # Development Corporation
+        }
+      ?wikidata wdt:P31 ?q .
+         OPTIONAL { ?wikidata wdt:P856 ?website }
+         OPTIONAL { ?wikidata wdt:P3120 ?toid }
+         OPTIONAL { ?wikidata wdt:P836 ?gss }
+         OPTIONAL { ?wikidata wdt:P571 ?inception }
+         OPTIONAL { ?wikidata wdt:P576 ?dissolved }
+         ?wikidata rdfs:label ?name .
+           FILTER (langMatches( lang(?name), "EN" ) )
+    }
+    """)
+
+patch(corporations, key="wikidata", fields=["name", "website", "statistical-geography", "start-date", "end-date"], prefix="http://www.wikidata.org/entity/")
+
+# match opencommunities.org
+s = sparql(
     "https://opendatacommunities.org/sparql",
     """
     PREFIX admingeo: <http://opendatacommunities.org/def/ontology/admingeo/>
@@ -154,20 +177,15 @@ patch_sparql(
             <http://publishmydata.com/def/ontology/foi/displayName> ?name ;
             <http://publishmydata.com/def/ontology/foi/code> ?gss
     }
-    """,
-    "statistical-geography",
-    ["name", "opendatacommunities"],
-    "gss",
-)
+    """)
 
+patch(s, key="statistical-geography", fields=["name", "opendatacommunities"])
 
 # add website, toids from wikidata
-patch_sparql(
+authorities = sparql(
     "https://query.wikidata.org/sparql",
     """
-    SELECT DISTINCT ?wikidata ?gss ?toid ?website
-    WHERE
-    {
+    SELECT DISTINCT * WHERE {
       VALUES ?q {
         wd:Q4321471 # county council 
         wd:Q5150900 # combined authority 
@@ -192,14 +210,15 @@ patch_sparql(
          { ?wikidata wdt:P856 ?website }
          OPTIONAL { ?wikidata wdt:P3120 ?toid }
          OPTIONAL { ?wikidata wdt:P836 ?gss }
+         ?wikidata rdfs:label ?name .
+           FILTER (langMatches( lang(?name), "EN" ) )
     }
-    """,
-    "statistical-geography",
-    ["wikidata", "website", "toid"],
-    "gss",
-    prefix="http://www.wikidata.org/entity/",
-)
+    """)
+#patch(authorities, key="wikidata", fields=["wikidata", "name", "website", "toid"], prefix="http://www.wikidata.org/entity/")
+patch(authorities, key="statistical-geography", fields=["wikidata", "website", "toid"], prefix="http://www.wikidata.org/entity/")
 
+
+errors = 0
 
 w = csv.DictWriter(sys.stdout, fields, extrasaction="ignore")
 w.writeheader()
@@ -207,4 +226,20 @@ for organisation in sorted(organisations):
     o = organisations[organisation]
     o["organisation"] = organisation
     o["name"] = o.get("official-name", o.get("name", ""))
+
+    # strip blank times from dates
+    for k in o:
+        if k.endswith("-date") and o[k].endswith("T00:00:00Z"):
+            o[k] = o[k][:10]
+
+    if not all(k in o and o[k] for k in ["name", 
+#    "website", 
+    #"statistical-geography"
+]):
+        print(o, file=sys.stderr)
+        errors += 1
     w.writerow(o)
+
+if errors:
+    print(errors, "errors", file=sys.stderr)
+    #sys.exit(2)
